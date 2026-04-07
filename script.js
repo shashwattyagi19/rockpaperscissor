@@ -1,87 +1,223 @@
-// Import necessary libraries
-import { HandPose, Finger, load } from '@tensorflow/tfjs';
-import * as cv from 'opencv-js';
+let playerScore = 0;
+let cpuScore = 0;
+let gameActive = false;
+let detectedGesture = null;
+let gameInProgress = false;
 
-// Initialize necessary variables
-let score = { player: 0, computer: 0 };
-const gestures = {
-    rock: '✊',
-    paper: '✋',
-    scissors: '✌',
-};
+const videoElement = document.getElementById('input_video');
+const canvasElement = document.getElementById('output_canvas');
+const gestureIndicator = document.getElementById('gesture-indicator');
+const startBtn = document.getElementById('start-btn');
+const countdownDiv = document.getElementById('countdown');
+const resultBadge = document.getElementById('result-badge');
+const playerMoveDiv = document.getElementById('player-move');
+const computerMoveDiv = document.getElementById('computer-move');
+const playerScoreDiv = document.getElementById('player-score');
+const cpuScoreDiv = document.getElementById('cpu-score');
 
-// Load the handpose model
-async function loadModel() {
-    const model = await load('https://model-url');
-    return model;
-}
+const canvasCtx = canvasElement.getContext('2d');
 
-// Function to detect hand gestures
-async function detectGesture(model) {
-    const video = document.getElementById('video');
-    const predictions = await model.estimateHands(video);
-    if (predictions.length > 0) {
-        // Classify gesture
-        return classifyGesture(predictions[0]);
+// Initialize MediaPipe Hands
+const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+});
+
+hands.onResults(onResults);
+
+// Setup camera
+const camera = new Camera(videoElement, {
+    onFrame: async () => {
+        await hands.send({ image: videoElement });
+    },
+    width: 640,
+    height: 480
+});
+
+camera.start();
+
+// EXACT LOGIC FROM YOUR PYTHON NOTEBOOK
+// Finger tip landmarks indices
+const FINGER_TIPS = [4, 8, 12, 16, 20];
+
+function detectGesture(landmarks) {
+    if (!landmarks || landmarks.length === 0) return null;
+
+    const hand = landmarks[0];
+    const fingers = [];
+
+    // Thumb - Check x-coordinate (left/right)
+    if (hand[FINGER_TIPS[0]].x < hand[FINGER_TIPS[0]-1].x) {
+        fingers.push(1);
+    } else {
+        fingers.push(0);
     }
-    return null;
-}
 
-// Classify detected gesture
-function classifyGesture(prediction) {
-    // Implement gesture classification logic
-    // This is a placeholder logic
-    const hand = prediction.annotations;
-    if (hand.indexFinger[1][1] < hand.pinky[1][1]) return 'rock';  // Example
-    if (hand.indexFinger[1][1] > hand.pinky[1][1]) return 'scissors'; // Example
-    return 'paper';
-}
-
-// Function to play the game
-function playGame(playerGesture) {
-    const computerGesture = getRandomGesture();
-    const result = determineWinner(playerGesture, computerGesture);
-    updateScore(result);
-    // Update UI with results
-}
-
-// Randomly select computer's gesture
-function getRandomGesture() {
-    const gestureKeys = Object.keys(gestures);
-    return gestureKeys[Math.floor(Math.random() * gestureKeys.length)];
-}
-
-// Determine winner
-function determineWinner(player, computer) {
-    if (player === computer) return 'Tie';
-    if ((player === 'rock' && computer === 'scissors') || 
-        (player === 'paper' && computer === 'rock') || 
-        (player === 'scissors' && computer === 'paper')) {
-        return 'Player';
+    // Other fingers (Index, Middle, Ring, Pinky) - Check y-coordinate (up/down)
+    for (let i = 1; i < 5; i++) {
+        if (hand[FINGER_TIPS[i]].y < hand[FINGER_TIPS[i]-2].y) {
+            fingers.push(1);
+        } else {
+            fingers.push(0);
+        }
     }
-    return 'Computer';
-}
 
-// Update game score
-function updateScore(winner) {
-    if (winner === 'Player') {
-        score.player += 1;
-    } else if (winner === 'Computer') {
-        score.computer += 1;
+    const total = fingers.reduce((a, b) => a + b, 0);
+
+    // Your exact logic:
+    // 0 fingers = Rock
+    // 2 fingers = Scissors
+    // 5 fingers = Paper
+    if (total === 0) {
+        return 'rock';
+    } else if (total === 2) {
+        return 'scissors';
+    } else if (total === 5) {
+        return 'paper';
+    } else {
+        return null;
     }
-    // Update UI with score
 }
 
-// Main function to start the game
-async function startGame() {
-    const model = await loadModel();
-    setInterval(async () => {
-        const playerGesture = await detectGesture(model);
-        if (playerGesture) {
-            playGame(playerGesture);
+function onResults(results) {
+    // Clear canvas
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    // Draw video frame
+    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+    
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        // Draw hand landmarks
+        drawingUtils.drawConnectors(
+            canvasCtx,
+            results.multiHandLandmarks[0],
+            Hands.HAND_CONNECTIONS,
+            { color: '#00FF00', lineWidth: 5 }
+        );
+        drawingUtils.drawLandmarks(
+            canvasCtx,
+            results.multiHandLandmarks[0],
+            { color: '#FF0000', lineWidth: 2 }
+        );
+        
+        // Detect gesture using YOUR EXACT LOGIC
+        const gesture = detectGesture(results.multiHandLandmarks);
+        detectedGesture = gesture;
+        
+        if (gesture) {
+            const gestureEmoji = {
+                'rock': '✊ Rock',
+                'paper': '✋ Paper',
+                'scissors': '✌️ Scissors'
+            };
+            
+            gestureIndicator.textContent = gestureEmoji[gesture];
+            gestureIndicator.classList.remove('hidden');
+        } else {
+            gestureIndicator.classList.add('hidden');
+        }
+    } else {
+        gestureIndicator.classList.add('hidden');
+        detectedGesture = null;
+    }
+}
+
+// Game logic
+startBtn.addEventListener('click', startGame);
+
+function startGame() {
+    if (!detectedGesture) {
+        alert('Please show a hand gesture first!');
+        return;
+    }
+    
+    if (gameInProgress) return;
+    gameInProgress = true;
+    
+    gameActive = false;
+    startBtn.disabled = true;
+    
+    // Show countdown (3 seconds like your Python code)
+    countdownDiv.classList.remove('hidden');
+    let countdown = 3;
+    
+    const countdownInterval = setInterval(() => {
+        if (countdown === 0) {
+            clearInterval(countdownInterval);
+            countdownDiv.classList.add('hidden');
+            playRound();
+            startBtn.disabled = false;
+            gameInProgress = false;
+        } else {
+            countdownDiv.textContent = countdown;
+            countdown--;
         }
     }, 1000);
 }
 
-// Start the game
-startGame();
+function playRound() {
+    const playerMove = detectedGesture;
+    const computerMoves = ['rock', 'paper', 'scissors'];
+    const computerMove = computerMoves[Math.floor(Math.random() * 3)];
+    
+    // Update UI with moves
+    updateMoveDisplay(playerMove, computerMove);
+    
+    // Determine winner using YOUR EXACT LOGIC
+    const result = determineWinner(playerMove, computerMove);
+    
+    // Update scores
+    if (result === 'win') {
+        playerScore++;
+        resultBadge.className = 'result-badge win';
+        resultBadge.textContent = '🎉 You Win!';
+    } else if (result === 'lose') {
+        cpuScore++;
+        resultBadge.className = 'result-badge lose';
+        resultBadge.textContent = '😢 You Lose!';
+    } else {
+        resultBadge.className = 'result-badge tie';
+        resultBadge.textContent = '🤝 Draw!';
+    }
+    
+    resultBadge.classList.remove('hidden');
+    playerScoreDiv.textContent = playerScore;
+    cpuScoreDiv.textContent = cpuScore;
+    
+    // Hide result after 2 seconds
+    setTimeout(() => {
+        resultBadge.classList.add('hidden');
+    }, 2000);
+}
+
+function updateMoveDisplay(playerMove, computerMove) {
+    const moveEmojis = {
+        'rock': '✊',
+        'paper': '✋',
+        'scissors': '✌️'
+    };
+    
+    playerMoveDiv.textContent = moveEmojis[playerMove];
+    computerMoveDiv.textContent = moveEmojis[computerMove];
+}
+
+// Your exact win logic from Python
+function determineWinner(player, computer) {
+    if (player === computer) return 'draw';
+    
+    if (
+        (player === 'rock' && computer === 'scissors') ||
+        (player === 'paper' && computer === 'rock') ||
+        (player === 'scissors' && computer === 'paper')
+    ) {
+        return 'win';
+    }
+    
+    return 'lose';
+}
